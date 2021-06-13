@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package tls
+package tls13
 
 import (
 	"bytes"
+	"crypto/tls"
 	"math/rand"
 	"reflect"
 	"strings"
@@ -19,15 +20,11 @@ var tests = []interface{}{
 	&serverHelloMsg{},
 	&finishedMsg{},
 
-	&certificateMsg{},
-	&certificateRequestMsg{},
 	&certificateVerifyMsg{
 		hasSignatureAlgorithm: true,
 	},
 	&certificateStatusMsg{},
 	&clientKeyExchangeMsg{},
-	&newSessionTicketMsg{},
-	&sessionState{},
 	&sessionStateTLS13{},
 	&encryptedExtensionsMsg{},
 	&endOfEarlyDataMsg{},
@@ -134,9 +131,9 @@ func (*clientHelloMsg) Generate(rand *rand.Rand, size int) reflect.Value {
 	}
 	m.ocspStapling = rand.Intn(10) > 5
 	m.supportedPoints = randomBytes(rand.Intn(5)+1, rand)
-	m.supportedCurves = make([]CurveID, rand.Intn(5)+1)
+	m.supportedCurves = make([]tls.CurveID, rand.Intn(5)+1)
 	for i := range m.supportedCurves {
-		m.supportedCurves[i] = CurveID(rand.Intn(30000) + 1)
+		m.supportedCurves[i] = tls.CurveID(rand.Intn(30000) + 1)
 	}
 	if rand.Intn(10) > 5 {
 		m.ticketSupported = true
@@ -170,7 +167,7 @@ func (*clientHelloMsg) Generate(rand *rand.Rand, size int) reflect.Value {
 	}
 	for i := 0; i < rand.Intn(5); i++ {
 		var ks keyShare
-		ks.group = CurveID(rand.Intn(30000) + 1)
+		ks.group = tls.CurveID(rand.Intn(30000) + 1)
 		ks.data = randomBytes(rand.Intn(200)+1, rand)
 		m.keyShares = append(m.keyShares, ks)
 	}
@@ -201,7 +198,6 @@ func (*serverHelloMsg) Generate(rand *rand.Rand, size int) reflect.Value {
 	m.sessionId = randomBytes(rand.Intn(32), rand)
 	m.cipherSuite = uint16(rand.Int31())
 	m.compressionMethod = uint8(rand.Intn(256))
-	m.supportedPoints = randomBytes(rand.Intn(5)+1, rand)
 
 	if rand.Intn(10) > 5 {
 		m.ocspStapling = true
@@ -229,11 +225,11 @@ func (*serverHelloMsg) Generate(rand *rand.Rand, size int) reflect.Value {
 	}
 	if rand.Intn(10) > 5 {
 		for i := 0; i < rand.Intn(5); i++ {
-			m.serverShare.group = CurveID(rand.Intn(30000) + 1)
+			m.serverShare.group = tls.CurveID(rand.Intn(30000) + 1)
 			m.serverShare.data = randomBytes(rand.Intn(200)+1, rand)
 		}
 	} else if rand.Intn(10) > 5 {
-		m.selectedGroup = CurveID(rand.Intn(30000) + 1)
+		m.selectedGroup = tls.CurveID(rand.Intn(30000) + 1)
 	}
 	if rand.Intn(10) > 5 {
 		m.selectedIdentityPresent = true
@@ -253,29 +249,10 @@ func (*encryptedExtensionsMsg) Generate(rand *rand.Rand, size int) reflect.Value
 	return reflect.ValueOf(m)
 }
 
-func (*certificateMsg) Generate(rand *rand.Rand, size int) reflect.Value {
-	m := &certificateMsg{}
-	numCerts := rand.Intn(20)
-	m.certificates = make([][]byte, numCerts)
-	for i := 0; i < numCerts; i++ {
-		m.certificates[i] = randomBytes(rand.Intn(10)+1, rand)
-	}
-	return reflect.ValueOf(m)
-}
-
-func (*certificateRequestMsg) Generate(rand *rand.Rand, size int) reflect.Value {
-	m := &certificateRequestMsg{}
-	m.certificateTypes = randomBytes(rand.Intn(5)+1, rand)
-	for i := 0; i < rand.Intn(100); i++ {
-		m.certificateAuthorities = append(m.certificateAuthorities, randomBytes(rand.Intn(15)+1, rand))
-	}
-	return reflect.ValueOf(m)
-}
-
 func (*certificateVerifyMsg) Generate(rand *rand.Rand, size int) reflect.Value {
 	m := &certificateVerifyMsg{}
 	m.hasSignatureAlgorithm = true
-	m.signatureAlgorithm = SignatureScheme(rand.Intn(30000))
+	m.signatureAlgorithm = tls.SignatureScheme(rand.Intn(30000))
 	m.signature = randomBytes(rand.Intn(15)+1, rand)
 	return reflect.ValueOf(m)
 }
@@ -296,24 +273,6 @@ func (*finishedMsg) Generate(rand *rand.Rand, size int) reflect.Value {
 	m := &finishedMsg{}
 	m.verifyData = randomBytes(12, rand)
 	return reflect.ValueOf(m)
-}
-
-func (*newSessionTicketMsg) Generate(rand *rand.Rand, size int) reflect.Value {
-	m := &newSessionTicketMsg{}
-	m.ticket = randomBytes(rand.Intn(4), rand)
-	return reflect.ValueOf(m)
-}
-
-func (*sessionState) Generate(rand *rand.Rand, size int) reflect.Value {
-	s := &sessionState{}
-	s.vers = uint16(rand.Intn(10000))
-	s.cipherSuite = uint16(rand.Intn(10000))
-	s.masterSecret = randomBytes(rand.Intn(100)+1, rand)
-	s.createdAt = uint64(rand.Int63())
-	for i := 0; i < rand.Intn(20); i++ {
-		s.certificates = append(s.certificates, randomBytes(rand.Intn(500)+1, rand))
-	}
-	return reflect.ValueOf(s)
 }
 
 func (*sessionStateTLS13) Generate(rand *rand.Rand, size int) reflect.Value {
@@ -409,7 +368,7 @@ func TestRejectEmptySCTList(t *testing.T) {
 	var random [32]byte
 	sct := []byte{0x42, 0x42, 0x42, 0x42}
 	serverHello := serverHelloMsg{
-		vers:   VersionTLS12,
+		vers:   tls.VersionTLS12,
 		random: random[:],
 		scts:   [][]byte{sct},
 	}
@@ -452,7 +411,7 @@ func TestRejectEmptySCT(t *testing.T) {
 
 	var random [32]byte
 	serverHello := serverHelloMsg{
-		vers:   VersionTLS12,
+		vers:   tls.VersionTLS12,
 		random: random[:],
 		scts:   [][]byte{nil},
 	}
